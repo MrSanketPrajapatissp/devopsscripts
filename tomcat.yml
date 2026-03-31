@@ -1,0 +1,93 @@
+---
+- name: Install and Configure Tomcat (Latest Version)
+  hosts: all
+  become: yes
+
+  vars:
+    tomcat_version: 10.1.35   # 🔥 Update here when new version comes
+    tomcat_dir: "apache-tomcat-{{ tomcat_version }}"
+    tomcat_tar: "{{ tomcat_dir }}.tar.gz"
+    tomcat_url: "https://dlcdn.apache.org/tomcat/tomcat-10/v{{ tomcat_version.split('.')[0] }}/bin/{{ tomcat_tar }}"
+    tomcat_path: /opt/tomcat
+
+  tasks:
+
+    - name: Install Java (Amazon Corretto 17)
+      dnf:
+        name: java-17-amazon-corretto
+        state: present
+
+    - name: Check if Tomcat already installed
+      stat:
+        path: "{{ tomcat_path }}"
+      register: tomcat_installed
+
+    - name: Download Tomcat
+      get_url:
+        url: "{{ tomcat_url }}"
+        dest: "/tmp/{{ tomcat_tar }}"
+      when: not tomcat_installed.stat.exists
+
+    - name: Extract Tomcat
+      unarchive:
+        src: "/tmp/{{ tomcat_tar }}"
+        dest: /opt/
+        remote_src: yes
+      when: not tomcat_installed.stat.exists
+
+    - name: Rename Tomcat Directory
+      command: mv "/opt/{{ tomcat_dir }}" "{{ tomcat_path }}"
+      args:
+        creates: "{{ tomcat_path }}"
+      when: not tomcat_installed.stat.exists
+
+    - name: Set execute permissions
+      file:
+        path: "{{ tomcat_path }}/bin"
+        mode: '0755'
+        recurse: yes
+
+    - name: Configure tomcat-users.xml
+      template:
+        src: tomcat-users.xml
+        dest: "{{ tomcat_path }}/conf/tomcat-users.xml"
+
+    - name: Configure context.xml
+      template:
+        src: context.xml
+        dest: "{{ tomcat_path }}/webapps/manager/META-INF/context.xml"
+
+    - name: Create Tomcat systemd Service File
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Apache Tomcat Server
+          After=network.target
+
+          [Service]
+          Type=forking
+          User=root
+          Group=root
+
+          Environment=JAVA_HOME=/usr/lib/jvm/java-17-amazon-corretto
+          Environment=CATALINA_HOME={{ tomcat_path }}
+
+          ExecStart={{ tomcat_path }}/bin/startup.sh
+          ExecStop={{ tomcat_path }}/bin/shutdown.sh
+
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and Enable Tomcat
+      systemd:
+        name: tomcat
+        state: started
+        enabled: yes
